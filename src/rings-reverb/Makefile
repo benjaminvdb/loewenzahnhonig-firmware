@@ -2,7 +2,7 @@
 TARGET = rings-reverb
 
 # Sources
-CPP_SOURCES = rings-reverb.cpp
+CPP_SOURCES = rings-reverb.cpp ../../lib/loewy.cpp
 
 # Library Locations
 LIBDAISY_DIR = ../../lib/libDaisy

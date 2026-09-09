@@ -4,7 +4,7 @@ TARGET = sploodge-reverb
 USE_DAISYSP_LGPL=1
 
 # Sources
-CPP_SOURCES = sploodge-reverb.cpp
+CPP_SOURCES = sploodge-reverb.cpp ../../lib/loewy.cpp
 
 # Library Locations
 LIBDAISY_DIR = ../../lib/libDaisy

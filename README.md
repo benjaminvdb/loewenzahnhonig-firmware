@@ -56,3 +56,5 @@ This will compile the VCA firmware and place its output in the `build` subdirect
 ## Contributing
 
 New firmwares for the Löwenzahnhonig module are always very welcome. Feel free to open a PR anytime. Each new firmware should be located in a new sub-folder with the same name as the `.ino` file together with a `README.md` file telling users about the controls and other possibly interesting stuff.
+
+Make-based firmwares can use the small hardware abstraction in `lib/loewy.h`: it initializes the Daisy Seed and the ADC channels of the four pots and two CV inputs, and smooths their readings. `src/vca/vca.cpp` is a minimal example of how to use it.

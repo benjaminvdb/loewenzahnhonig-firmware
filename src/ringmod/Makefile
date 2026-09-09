@@ -4,7 +4,7 @@ TARGET = ringmod
 USE_DAISYSP_LGPL=1
 
 # Sources
-CPP_SOURCES = ringmod.cpp
+CPP_SOURCES = ringmod.cpp ../../lib/loewy.cpp
 
 # Library Locations
 LIBDAISY_DIR = ../../lib/libDaisy
