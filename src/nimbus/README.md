@@ -204,15 +204,46 @@ is most rewarding to modulate.
   full scale. The same curve as in Clouds (`SoftClip`) is applied to the output.
 - **Pitch has a dead zone.** The pots have no centre detent, so a pot that is
   visually centred would otherwise sit a few cents off unison.
-- **Granular mode and 16-bit stereo only.** Clouds' other modes and quality
-  settings would need a way to select them. 16-bit stereo gives the best
-  fidelity; it limits the buffer to about 0.7 s at 48 kHz, which is plenty for
-  a live granulator and for freezing phrases.
+- **Granular mode and 16-bit stereo by default; other engines and qualities
+  as separate builds.** The module has no way to switch Clouds' modes or
+  quality settings at runtime, so they are offered as variants (see below)
+  instead of a menu. 16-bit stereo gives the best fidelity; it limits the
+  buffer to about 0.7 s at 48 kHz, which is plenty for a live granulator and
+  for freezing phrases. The lo-fi variant trades fidelity for a 5 s buffer.
 
 Known limitations that follow from these choices: there is no pitch CV and no
 dry/wet control; Pot 4 is silent at its centre unless CV 2 is triggered; dense
 regular grains at unison are loud; and the CV inputs are unipolar, so bipolar
 modulation only acts on its positive half.
+
+## Variants
+
+Nimbus comes in several variants, each a separate binary with a different
+configuration, so you can pick one without touching the code. All of them share
+`nimbus.cpp`, the fully wet and soft-clipped output, CV 1 on the position and
+the freeze/trigger gate on CV 2.
+
+| Variant | Folder | Engine | What differs |
+|---------|--------|--------|--------------|
+| `nimbus` | `src/nimbus` | Granular, 16-bit stereo | The default described in this file |
+| `nimbus-stretch` | `src/nimbus-stretch` | Pitch-shifter/time-stretcher | Pot 4 is a low-pass/high-pass tone filter; clean transposition, and time-stretching of a frozen buffer with Pot 1 |
+| `nimbus-looping-delay` | `src/nimbus-looping-delay` | Looping delay | Pot 1 delay time, Pot 2 feedback, Pot 3 pitch of the repeats, Pot 4 window size (loop length when frozen); freeze loops the buffer, triggers set the delay time |
+| `nimbus-lofi` | `src/nimbus-lofi` | Granular, 8-bit mu-law mono | Same controls, about 5 s of buffer, up to 57 grains, gritty 24 kHz audio |
+
+Each folder has a README with the details, and the binaries are attached to
+the releases next to the other firmwares.
+
+### Making your own variant
+
+1. Copy one of the `src/nimbus-*` folders to a new folder under `src/` and give
+   it its own `TARGET` name and `NIMBUS_VARIANT` define in the Makefile.
+2. Add a matching `#elif defined(NIMBUS_VARIANT_...)` block in
+   `src/nimbus/nimbus.cpp` with a `Variant`: the playback mode, the audio
+   quality (0 = 16-bit stereo, 1 = 16-bit mono, 2 = 8-bit stereo, 3 = 8-bit
+   mono), the role of each pot (position, size, pitch, density, texture or
+   feedback) and the values of the parameters that get no pot.
+3. Run `make` in the new folder and describe the variant in its README.
+   `build_firmwares.py` and CI pick up every folder with a Makefile.
 
 ## Technical notes
 
@@ -226,6 +257,9 @@ modulation only acts on its positive half.
 - The pots and CV inputs are read through the shared `Loewy` class in `lib/`,
   which smooths them at the audio callback rate. The freeze gate is evaluated
   once per block, so triggers shorter than a block (about 0.7 ms) can be missed.
+- All variants compile the same `nimbus.cpp`. `nimbus.mk` holds the shared
+  build rules; a variant folder's Makefile only sets the target name and the
+  `NIMBUS_VARIANT_*` define that selects the configuration.
 
 ## Building
 
@@ -236,7 +270,8 @@ cd src/nimbus
 make
 ```
 
-The binary ends up in `build/nimbus.bin`.
+The binary ends up in `build/nimbus.bin`. The variants are built the same way
+from their own folders (`src/nimbus-stretch` and so on).
 
 ## Credits
 

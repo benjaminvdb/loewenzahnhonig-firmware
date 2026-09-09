@@ -12,25 +12,94 @@ using namespace loewy;
  * Author: Ben van der Burgh
  *
  * Nimbus (Electro-Smith's port of Mutable Instruments Clouds) for the
- * Löwenzahnhonig. Runs Clouds' granular mode in 16-bit stereo quality, always
- * fully wet; mix the dry signal in outside the module if you need it.
+ * Löwenzahnhonig. This file is shared by the Nimbus variants: every variant
+ * folder compiles it with a NIMBUS_VARIANT_* define that selects one of the
+ * configurations below (playback mode, audio quality, what the pots control
+ * and the values of the parameters without a control). See README.md.
  *
- * Pot 1: Position. Where in the recording buffer the grains are taken from:
- *        fully CCW is the most recent audio, clockwise travels back in time
- *        (up to about 0.7 s). Scrubs through the buffer while frozen.
- * Pot 2: Size. Grain length, about 20 ms to 340 ms.
- * Pot 3: Pitch. -2 to +2 octaves, exactly unison around the centre.
- * Pot 4: Density, as on Clouds: regular grains left of the centre, none at
- *        the centre, random grains right of it, more overlap towards the ends.
- *        The right half also smooths the grain envelopes, engages the diffuser
- *        and adds reverb, so fully CW is a thick diffuse wash.
- * CV 1:  Position, added to Pot 1.
- * CV 2:  Freeze/trigger gate. The buffer is frozen while the gate is high and
- *        every rising edge plays one grain, which is what you hear when Pot 4
- *        is centred (a trigger sampler, like Clouds' TRIG input).
+ * Common to all variants:
+ * - The output is always fully wet and soft-clipped.
+ * - CV 1 is added to the playback position.
+ * - CV 2 is a freeze/trigger gate: the buffer is frozen while the gate is
+ *   high, and every rising edge sends Clouds' trigger (a single grain in
+ *   granular mode, a clock in the other modes).
  */
 
 namespace {
+
+// What a pot controls.
+enum class Role {
+  kPosition,  // where in the buffer playback happens (CV 1 is added to it)
+  kSize,      // grain size, window size or loop length, depending on the mode
+  kPitch,     // -2..+2 octaves with a unison dead zone around the centre
+  kDensity,   // Clouds' density; in granular mode the right half also raises
+              // texture (0.5 -> 1.0) and reverb (0.2 -> 0.6)
+  kTexture,   // grain envelope (granular) or low-pass/high-pass filter
+  kFeedback,  // amount of output fed back into the buffer
+};
+
+struct Variant {
+  PlaybackMode playback_mode;
+  int32_t quality;  // 0: 16-bit stereo, 1: 16-bit mono, 2: 8-bit stereo,
+                    // 3: 8-bit mono (mu-law, half the sample rate)
+  Role pot[Loewy::kNumPots];
+  // Values of the parameters that no pot controls in this variant. Position
+  // without a pot is 0 (the most recent audio) plus CV 1.
+  float density;
+  float texture;
+  float feedback;
+  float reverb;
+  float stereo_spread;
+};
+
+#if defined(NIMBUS_VARIANT_STRETCH)
+// Clouds' pitch-shifter/time-stretcher: overlapping windows instead of grains.
+// Pot 4 is the low-pass/high-pass filter (open at the centre).
+constexpr Variant kVariant = {
+    PLAYBACK_MODE_STRETCH,
+    0,
+    {Role::kPosition, Role::kSize, Role::kPitch, Role::kTexture},
+    /*density=*/0.f,
+    /*texture=*/0.5f,
+    /*feedback=*/0.f,
+    /*reverb=*/0.2f,
+    /*stereo_spread=*/0.5f};
+#elif defined(NIMBUS_VARIANT_LOOPING_DELAY)
+// Clouds' looping delay: Pot 1 is the delay time (loop start when frozen),
+// Pot 2 the feedback, Pot 3 the pitch of the repeats, Pot 4 the size of the
+// pitch-shifting windows (loop length when frozen).
+constexpr Variant kVariant = {
+    PLAYBACK_MODE_LOOPING_DELAY,
+    0,
+    {Role::kPosition, Role::kFeedback, Role::kPitch, Role::kSize},
+    /*density=*/0.f,
+    /*texture=*/0.5f,
+    /*feedback=*/0.f,
+    /*reverb=*/0.2f,
+    /*stereo_spread=*/0.5f};
+#elif defined(NIMBUS_VARIANT_LOFI)
+// The default mapping with 8-bit mu-law mono audio: about 5 s of buffer.
+constexpr Variant kVariant = {
+    PLAYBACK_MODE_GRANULAR,
+    3,
+    {Role::kPosition, Role::kSize, Role::kPitch, Role::kDensity},
+    /*density=*/0.f,
+    /*texture=*/0.5f,
+    /*feedback=*/0.15f,
+    /*reverb=*/0.2f,
+    /*stereo_spread=*/0.5f};
+#else
+// Default: Clouds' granular mode in 16-bit stereo.
+constexpr Variant kVariant = {
+    PLAYBACK_MODE_GRANULAR,
+    0,
+    {Role::kPosition, Role::kSize, Role::kPitch, Role::kDensity},
+    /*density=*/0.f,
+    /*texture=*/0.5f,
+    /*feedback=*/0.15f,
+    /*reverb=*/0.2f,
+    /*stereo_spread=*/0.5f};
+#endif
 
 // Pitch pot: quadratic curve for fine control near unison, with a dead zone so
 // that a roughly centred pot is exactly unison.
@@ -40,11 +109,6 @@ constexpr float kPitchRangeSemitones = 24.f;
 // Freeze gate thresholds on the 0..1 CV reading, with hysteresis.
 constexpr float kFreezeOn = 0.55f;
 constexpr float kFreezeOff = 0.45f;
-
-// Blend parameters without a control of their own.
-constexpr float kDryWet = 1.f;
-constexpr float kStereoSpread = 0.5f;
-constexpr float kFeedback = 0.15f;
 
 float PitchFromPot(float pot) {
   float offset = pot - 0.5f;
@@ -68,28 +132,62 @@ uint8_t block_ccm[65536 - 128];
 Parameters* parameters;
 bool frozen = false;
 
+// Reads the pots and CV 1 into the parameters according to the variant.
+void ReadControls() {
+  parameters->position = 0.f;
+  parameters->density = kVariant.density;
+  parameters->texture = kVariant.texture;
+  parameters->feedback = kVariant.feedback;
+  parameters->reverb = kVariant.reverb;
+
+  const float pots[Loewy::kNumPots] = {hardware.GetPot1(), hardware.GetPot2(),
+                                       hardware.GetPot3(), hardware.GetPot4()};
+  for (size_t i = 0; i < Loewy::kNumPots; i++) {
+    const float value = pots[i];
+    switch (kVariant.pot[i]) {
+      case Role::kPosition:
+        parameters->position = value;
+        break;
+      case Role::kSize:
+        parameters->size = value;
+        break;
+      case Role::kPitch:
+        parameters->pitch = PitchFromPot(value);
+        break;
+      case Role::kDensity: {
+        parameters->density = value;
+        if (kVariant.playback_mode == PLAYBACK_MODE_GRANULAR) {
+          // The clockwise half also morphs the grain envelopes from triangle
+          // to Hann (Clouds engages its diffuser above texture 0.75) and
+          // raises the reverb amount.
+          const float wash = clamp((value - 0.5f) * 2.f, 0.f, 1.f);
+          parameters->texture = 0.5f + 0.5f * wash;
+          parameters->reverb = 0.2f + 0.4f * wash;
+        }
+        break;
+      }
+      case Role::kTexture:
+        parameters->texture = value;
+        break;
+      case Role::kFeedback:
+        parameters->feedback = value;
+        break;
+    }
+  }
+
+  parameters->position =
+      clamp(parameters->position + hardware.GetCV1(), 0.f, 1.f);
+}
+
 void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
                    size_t size) {
   hardware.ProcessControls();
+  ReadControls();
 
-  parameters->position =
-      clamp(hardware.GetPot1() + hardware.GetCV1(), 0.f, 1.f);
-  parameters->size = hardware.GetPot2();
-  parameters->pitch = PitchFromPot(hardware.GetPot3());
-
-  // Pot 4 is Clouds' density control. Its clockwise half also morphs the grain
-  // envelopes from triangle to Hann (texture 0.5 to 1.0; Clouds engages its
-  // diffuser above 0.75) and raises the reverb amount.
-  float density = hardware.GetPot4();
-  float wash = clamp((density - 0.5f) * 2.f, 0.f, 1.f);
-  parameters->density = density;
-  parameters->texture = 0.5f + 0.5f * wash;
-  parameters->reverb = 0.2f + 0.4f * wash;
-
-  // CV 2 freezes the buffer while high and plays one grain per rising edge.
+  // CV 2 freezes the buffer while high and sends a trigger per rising edge.
   // The trigger flag is consumed by the processor within this block.
-  float gate = hardware.GetCV2();
-  bool was_frozen = frozen;
+  const float gate = hardware.GetCV2();
+  const bool was_frozen = frozen;
   if (gate > kFreezeOn) {
     frozen = true;
   } else if (gate < kFreezeOff) {
@@ -129,13 +227,12 @@ int main(void) {
   InitResources(sample_rate);
   processor.Init(sample_rate, block_mem, sizeof(block_mem), block_ccm,
                  sizeof(block_ccm));
-  processor.set_playback_mode(PLAYBACK_MODE_GRANULAR);
-  processor.set_quality(0);  // 16-bit stereo
+  processor.set_playback_mode(kVariant.playback_mode);
+  processor.set_quality(kVariant.quality);
 
   parameters = processor.mutable_parameters();
-  parameters->dry_wet = kDryWet;
-  parameters->stereo_spread = kStereoSpread;
-  parameters->feedback = kFeedback;
+  parameters->dry_wet = 1.f;
+  parameters->stereo_spread = kVariant.stereo_spread;
   parameters->freeze = false;
   parameters->trigger = false;
   parameters->gate = false;
