@@ -4,7 +4,7 @@ TARGET = distortion
 USE_DAISYSP_LGPL=1
 
 # Sources
-CPP_SOURCES = distortion.cpp distortion_engine.cpp
+CPP_SOURCES = distortion.cpp distortion_engine.cpp ../../lib/loewy.cpp
 
 # Library Locations
 LIBDAISY_DIR = ../../lib/libDaisy
